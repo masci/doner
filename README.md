@@ -1,4 +1,5 @@
 # doner
+<img width="105" height="105" alt="image" src="https://github.com/user-attachments/assets/2bb7d690-27c2-4fe6-81fb-4ebd02dfa925" />
 
 A CLI tool to retrieve and summarize issues from a GitHub Project board column.
 
