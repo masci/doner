@@ -1,0 +1,16 @@
+[package]
+name = "doner"
+version = "0.1.0"
+edition = "2024"
+description = "CLI tool to summarize GitHub project board issues"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0"
+keyring = { version = "3", features = ["apple-native"] }
+rpassword = "7"
