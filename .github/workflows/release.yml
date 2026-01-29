@@ -46,25 +46,25 @@ jobs:
         run: |
           cargo build --release --locked --target ${{ matrix.target }}
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            echo "BIN_NAME=roy.exe" >> $GITHUB_ENV
+            echo "BIN_NAME=doner.exe" >> $GITHUB_ENV
           else
-            echo "BIN_NAME=roy" >> $GITHUB_ENV
+            echo "BIN_NAME=doner" >> $GITHUB_ENV
           fi
 
       - name: Create build artifact
         shell: bash
         run: |
-          staging="roy-$GITHUB_REF_NAME-${{ matrix.target }}"
+          staging="doner-$GITHUB_REF_NAME-${{ matrix.target }}"
           mkdir -p "$staging"
           echo "STAGING=$staging" >> $GITHUB_ENV
 
           cp -r {README.md,LICENSE} "$staging"
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp "target/${{ matrix.target }}/release/roy.exe" "$staging/"
+            cp "target/${{ matrix.target }}/release/doner.exe" "$staging/"
             7z a "$staging.zip" "$staging"
             echo "ASSET=$staging.zip" >> $GITHUB_ENV
           else
-            cp "target/${{ matrix.target }}/release/roy" "$staging/"
+            cp "target/${{ matrix.target }}/release/doner" "$staging/"
             tar czf "$staging.tar.gz" "$staging"
             echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
           fi
