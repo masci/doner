@@ -61,6 +61,8 @@ pub struct PageInfo {
 pub struct ProjectItem {
     #[allow(dead_code)]
     pub id: String,
+    #[serde(rename = "isArchived")]
+    pub is_archived: bool,
     #[serde(rename = "fieldValueByName")]
     pub field_value_by_name: Option<FieldValue>,
     pub content: Option<ItemContent>,

@@ -1,5 +1,6 @@
 mod auth;
 mod github;
+mod llm;
 mod models;
 mod output;
 mod time_filter;
@@ -52,6 +53,14 @@ enum Commands {
         /// Group issues by parent issue
         #[arg(short = 'w', long = "wrap")]
         wrap: bool,
+
+        /// Use AI to generate a rich summary (requires OPENAI_API_KEY or ANTHROPIC_API_KEY)
+        #[arg(long = "ai")]
+        ai: bool,
+
+        /// Show debug information about fetched items
+        #[arg(long = "debug")]
+        debug: bool,
     },
 }
 
@@ -87,15 +96,18 @@ async fn main() -> Result<()> {
             since,
             format,
             wrap,
-        } => {
-            handle_summarize(project_id, column, since, format, wrap).await
-        }
+            ai,
+            debug,
+        } => handle_summarize(project_id, column, since, format, wrap, ai, debug).await,
     }
 }
 
 async fn handle_auth(action: AuthAction) -> Result<()> {
     match action {
-        AuthAction::Login { with_token, skip_validation } => {
+        AuthAction::Login {
+            with_token,
+            skip_validation,
+        } => {
             let token = match with_token {
                 Some(t) => t,
                 None => auth::interactive_login()?,
@@ -162,10 +174,12 @@ async fn handle_summarize(
     since: Option<String>,
     format: OutputFormat,
     wrap: bool,
+    ai: bool,
+    debug: bool,
 ) -> Result<()> {
     let token = auth::resolve_token()?;
 
-    let since = since
+    let since_filter = since
         .as_ref()
         .map(|s| time_filter::parse_time_filter(s))
         .transpose()?;
@@ -175,22 +189,53 @@ async fn handle_summarize(
     // Resolve project ID (either direct node ID or owner/number format)
     let project_node_id = client.resolve_project_id(&project_id).await?;
 
-    let issues = client
-        .fetch_project_issues(&project_node_id, &column, since)
+    let (issues, stats) = client
+        .fetch_project_issues(&project_node_id, &column, since_filter, debug)
         .await?;
+
+    if debug {
+        eprintln!("Debug: Project node ID: {}", project_node_id);
+        eprintln!("Debug: Looking for column: \"{}\"", column);
+        eprintln!("Debug: Status field: \"{}\"", std::env::var("DONER_STATUS_FIELD").unwrap_or_else(|_| "Status".to_string()));
+        eprintln!("Debug: Total items fetched: {}", stats.total_items);
+        eprintln!("Debug: Archived items (skipped): {}", stats.archived);
+        eprintln!("Debug: Wrong column (skipped): {}", stats.wrong_column);
+        eprintln!("Debug: Not an issue (skipped): {}", stats.not_issue);
+        eprintln!("Debug: Filtered by time (skipped): {}", stats.filtered_by_time);
+        eprintln!("Debug: Final count: {}", issues.len());
+        if !stats.columns_seen.is_empty() {
+            eprintln!("Debug: Columns seen: {:?}", stats.columns_seen);
+        }
+        eprintln!();
+    }
 
     if issues.is_empty() {
         println!("No issues found in column \"{}\"", column);
         return Ok(());
     }
 
+    // Always compute the formatted output
     let output = if wrap {
         output::format_grouped(&issues, format)
     } else {
         output::format_list(&issues, format)
     };
 
-    println!("{}", output);
+    // If AI flag is set, pass the formatted output to the LLM
+    if ai {
+        let llm_client = llm::LlmClient::from_env()?;
+
+        eprint!("Generating AI summary... ");
+        std::io::Write::flush(&mut std::io::stderr())?;
+
+        let summary = llm_client.summarize(&output).await?;
+        eprintln!("done");
+        eprintln!();
+
+        println!("{}", summary);
+    } else {
+        println!("{}", output);
+    }
 
     Ok(())
 }

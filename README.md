@@ -81,6 +81,7 @@ The project ID can be specified in two formats:
 | `--since` | `-s` | Filter issues by time | No limit |
 | `--format` | `-f` | Output format (`text` or `markdown`) | `text` |
 | `--wrap` | `-w` | Group issues by parent issue | Off |
+| `--ai` | | Generate AI-powered rich summary | Off |
 
 ### Time Filters
 
@@ -119,6 +120,57 @@ Get issues completed this week, grouped by parent, as markdown:
 
 ```bash
 doner sum myorg/5 -s this-week -w -f markdown
+```
+
+## AI-Powered Summaries
+
+Use the `--ai` flag to generate rich, narrative summaries using a local LLM CLI tool:
+
+```bash
+doner sum myorg/5 --since 7d --ai
+```
+
+### Supported CLI Tools
+
+The `--ai` flag uses locally installed CLI tools (auto-detected in this order):
+
+1. **gemini-cli** - Google's Gemini CLI ([install](https://github.com/google-gemini/gemini-cli))
+2. **cursor** - Cursor's CLI
+
+### Custom LLM Command
+
+Use any CLI tool that accepts a prompt as an argument:
+
+```bash
+# Set a custom command (prompt is appended as the last argument)
+export DONER_LLM_CMD="llm -m gpt-4"
+export DONER_LLM_CMD="ollama run llama3"
+export DONER_LLM_CMD="sgpt"
+
+doner sum myorg/5 --ai
+```
+
+### Example AI Output
+
+```
+## Work Summary
+
+### Infrastructure & Performance
+The team focused heavily on system reliability this week:
+- Implemented connection pooling for the database layer, reducing latency by 40%
+- Fixed memory leak in the background job processor
+- Added health check endpoints for all microservices
+
+### User Experience
+Several UI improvements shipped:
+- Dark mode support across all pages
+- Improved mobile responsiveness for the dashboard
+- Fixed accessibility issues with form inputs
+
+### Key Themes
+The work this week centered on technical debt reduction and polish,
+with a strong emphasis on performance optimization and user experience
+refinements ahead of the upcoming release.
 ```
 
 ## Output Examples

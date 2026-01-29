@@ -3,10 +3,21 @@ use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashSet;
 
 use crate::models::*;
 
 const GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
+
+#[derive(Debug, Default)]
+pub struct FetchStats {
+    pub total_items: usize,
+    pub archived: usize,
+    pub wrong_column: usize,
+    pub not_issue: usize,
+    pub filtered_by_time: usize,
+    pub columns_seen: HashSet<String>,
+}
 
 pub struct GitHubClient {
     client: Client,
@@ -202,24 +213,34 @@ impl GitHubClient {
         project_node_id: &str,
         column_name: &str,
         since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<Issue>> {
+        collect_stats: bool,
+    ) -> Result<(Vec<Issue>, FetchStats)> {
         let mut all_issues = Vec::new();
         let mut cursor: Option<String> = None;
+        let mut stats = FetchStats::default();
 
         loop {
-            let (issues, page_info) = self
-                .fetch_project_items_page(project_node_id, column_name, cursor.as_deref())
+            let (issues, page_info, page_stats) = self
+                .fetch_project_items_page(project_node_id, column_name, cursor.as_deref(), collect_stats)
                 .await?;
+
+            stats.total_items += page_stats.total_items;
+            stats.archived += page_stats.archived;
+            stats.wrong_column += page_stats.wrong_column;
+            stats.not_issue += page_stats.not_issue;
+            stats.columns_seen.extend(page_stats.columns_seen);
 
             for issue in issues {
                 // Filter by time if specified
                 if let Some(since_time) = since {
                     if let Some(closed_at) = issue.closed_at {
                         if closed_at < since_time {
+                            stats.filtered_by_time += 1;
                             continue;
                         }
                     } else {
                         // If no closed_at and we have a time filter, skip
+                        stats.filtered_by_time += 1;
                         continue;
                     }
                 }
@@ -232,7 +253,7 @@ impl GitHubClient {
             cursor = page_info.end_cursor;
         }
 
-        Ok(all_issues)
+        Ok((all_issues, stats))
     }
 
     async fn fetch_project_items_page(
@@ -240,7 +261,8 @@ impl GitHubClient {
         project_node_id: &str,
         column_name: &str,
         cursor: Option<&str>,
-    ) -> Result<(Vec<Issue>, PageInfo)> {
+        collect_stats: bool,
+    ) -> Result<(Vec<Issue>, PageInfo, FetchStats)> {
         let query = r#"
             query($projectId: ID!, $cursor: String, $statusField: String!) {
                 node(id: $projectId) {
@@ -252,6 +274,7 @@ impl GitHubClient {
                             }
                             nodes {
                                 id
+                                isArchived
                                 fieldValueByName(name: $statusField) {
                                     ... on ProjectV2ItemFieldSingleSelectValue {
                                         __typename
@@ -282,10 +305,13 @@ impl GitHubClient {
             }
         "#;
 
+        // Allow overriding the status field name via environment variable
+        let status_field = std::env::var("DONER_STATUS_FIELD").unwrap_or_else(|_| "Status".to_string());
+
         let variables = json!({
             "projectId": project_node_id,
             "cursor": cursor,
-            "statusField": "Status"
+            "statusField": status_field
         });
 
         let response = self.execute_query(query, &variables).await?;
@@ -304,37 +330,60 @@ impl GitHubClient {
             .ok_or_else(|| anyhow!("Project not found. Make sure the project ID is correct."))?;
 
         let mut issues = Vec::new();
+        let mut stats = FetchStats::default();
+        stats.total_items = project.items.nodes.len();
 
         for item in project.items.nodes {
+            // Skip archived items (hidden in GitHub UI)
+            if item.is_archived {
+                stats.archived += 1;
+                continue;
+            }
+
             // Check if item is in the specified column
             let item_column = item
                 .field_value_by_name
                 .as_ref()
                 .and_then(|fv| fv.name());
 
+            // Collect column names for debug output
+            if collect_stats {
+                if let Some(col) = item_column {
+                    stats.columns_seen.insert(col.to_string());
+                } else {
+                    stats.columns_seen.insert("<no status>".to_string());
+                }
+            }
+
             if item_column != Some(column_name) {
+                stats.wrong_column += 1;
                 continue;
             }
 
             // Extract issue content
-            if let Some(ItemContent::Issue(content)) = item.content {
-                let parent = content.parent.map(|p| crate::models::ParentIssue {
-                    number: p.number,
-                    title: p.title,
-                    url: p.url,
-                });
+            match item.content {
+                Some(ItemContent::Issue(content)) => {
+                    let parent = content.parent.map(|p| crate::models::ParentIssue {
+                        number: p.number,
+                        title: p.title,
+                        url: p.url,
+                    });
 
-                issues.push(Issue {
-                    number: content.number,
-                    title: content.title,
-                    url: content.url,
-                    closed_at: content.closed_at,
-                    repository: content.repository.name_with_owner,
-                    parent,
-                });
+                    issues.push(Issue {
+                        number: content.number,
+                        title: content.title,
+                        url: content.url,
+                        closed_at: content.closed_at,
+                        repository: content.repository.name_with_owner,
+                        parent,
+                    });
+                }
+                _ => {
+                    stats.not_issue += 1;
+                }
             }
         }
 
-        Ok((issues, project.items.page_info))
+        Ok((issues, project.items.page_info, stats))
     }
 }
