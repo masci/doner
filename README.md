@@ -221,4 +221,4 @@ Found 3 issue(s):
 
 ## License
 
-MIT
+MIT License - see [LICENSE](LICENSE) for details.
