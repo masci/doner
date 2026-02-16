@@ -65,6 +65,7 @@ pub struct ProjectItem {
     pub is_archived: bool,
     #[serde(rename = "fieldValueByName")]
     pub field_value_by_name: Option<FieldValue>,
+    pub iteration: Option<IterationValue>,
     pub content: Option<ItemContent>,
 }
 
@@ -81,6 +82,34 @@ impl FieldValue {
         match self {
             FieldValue::ProjectV2ItemFieldSingleSelectValue { name } => name.as_deref(),
             FieldValue::Other => None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "__typename")]
+pub enum IterationValue {
+    ProjectV2ItemFieldIterationValue {
+        title: Option<String>,
+        #[serde(rename = "startDate")]
+        start_date: Option<String>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+impl IterationValue {
+    pub fn title(&self) -> Option<&str> {
+        match self {
+            IterationValue::ProjectV2ItemFieldIterationValue { title, .. } => title.as_deref(),
+            IterationValue::Other => None,
+        }
+    }
+
+    pub fn start_date(&self) -> Option<&str> {
+        match self {
+            IterationValue::ProjectV2ItemFieldIterationValue { start_date, .. } => start_date.as_deref(),
+            IterationValue::Other => None,
         }
     }
 }

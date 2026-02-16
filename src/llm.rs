@@ -3,6 +3,7 @@ use std::process::Stdio;
 use tokio::process::Command;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum LlmProvider {
     Gemini,  // gemini-cli
     Cursor,  // cursor CLI
@@ -30,7 +31,7 @@ impl LlmClient {
             });
         }
 
-        if is_command_available("cursor") {
+        if is_command_available("agent") {
             return Ok(Self {
                 provider: LlmProvider::Cursor,
             });
@@ -47,11 +48,20 @@ impl LlmClient {
     /// Generate a rich summary from pre-formatted issue list
     pub async fn summarize(&self, formatted_issues: &str) -> Result<String> {
         let prompt = format!(
-            "Summarize the following completed tasks:\n\n{}\n\n\
-             Provide a rich summary that:\n\
-             1. Groups related work into themes\n\
-             2. Highlights key accomplishments\n\
-             3. Notes any significant patterns",
+            "You are a technical writer summarizing completed software development tasks. 
+Your goal is to create clear, concise summaries that highlight:
+- What was accomplished
+- The impact or value of the work
+- Any patterns or themes across multiple tasks
+
+Write in a professional but accessible tone. Group related work together when it makes sense.
+Use bullet points for clarity. Keep the summary focused and avoid unnecessary jargon. 
+Include links to the issues in the summary if available. 
+Use heading 4 for each theme and avoid using heading 1 to 3. Do not use bold formatting on headings.
+
+Summarize the following completed tasks:
+
+{}",
             formatted_issues
         );
 
@@ -63,11 +73,8 @@ impl LlmClient {
     }
 
     async fn call_gemini_cli(&self, prompt: &str) -> Result<String> {
-        let full_prompt = format!("{}\n\n{}", SYSTEM_PROMPT, prompt);
-
         let output = Command::new("gemini")
-            .arg("-p")
-            .arg(&full_prompt)
+            .arg(&prompt)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -85,12 +92,9 @@ impl LlmClient {
     }
 
     async fn call_cursor_cli(&self, prompt: &str) -> Result<String> {
-        let full_prompt = format!("{}\n\n{}", SYSTEM_PROMPT, prompt);
-
         // Cursor CLI uses stdin for prompts
-        let child = Command::new("cursor")
-            .arg("--prompt")
-            .arg(&full_prompt)
+        let child = Command::new("agent")
+            .arg(&prompt)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -112,8 +116,6 @@ impl LlmClient {
     }
 
     async fn call_custom_cli(&self, cmd: &str, prompt: &str) -> Result<String> {
-        let full_prompt = format!("{}\n\n{}", SYSTEM_PROMPT, prompt);
-
         // Parse the command - first word is the executable, rest are base args
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
@@ -124,7 +126,7 @@ impl LlmClient {
 
         let output = Command::new(executable)
             .args(base_args)
-            .arg(&full_prompt)
+            .arg(&prompt)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -153,13 +155,3 @@ fn is_command_available(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-const SYSTEM_PROMPT: &str = r#"You are a technical writer summarizing completed software development tasks. 
-Your goal is to create clear, concise summaries that highlight:
-- What was accomplished
-- The impact or value of the work
-- Any patterns or themes across multiple tasks
-
-Write in a professional but accessible tone. Group related work together when it makes sense.
-Use bullet points for clarity. Keep the summary focused and avoid unnecessary jargon. 
-Include links to the issues in the summary if available. 
-Use heading 4 for each theme and avoid using heading 1 to 3. Do not use bold formatting on headings."#;

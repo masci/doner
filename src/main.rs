@@ -46,6 +46,10 @@ enum Commands {
         #[arg(short = 's', long = "since")]
         since: Option<String>,
 
+        /// Filter by iteration (e.g., @current, @previous, @current,@previous, or iteration name)
+        #[arg(short = 'i', long = "iteration", default_value = "@current,@previous")]
+        iteration: Option<String>,
+
         /// Output format
         #[arg(short = 'f', long = "format", value_enum, default_value = "text")]
         format: OutputFormat,
@@ -94,11 +98,12 @@ async fn main() -> Result<()> {
             project_id,
             column,
             since,
+            iteration,
             format,
             wrap,
             ai,
             debug,
-        } => handle_summarize(project_id, column, since, format, wrap, ai, debug).await,
+        } => handle_summarize(project_id, column, since, iteration, format, wrap, ai, debug).await,
     }
 }
 
@@ -172,6 +177,7 @@ async fn handle_summarize(
     project_id: String,
     column: String,
     since: Option<String>,
+    iteration: Option<String>,
     format: OutputFormat,
     wrap: bool,
     ai: bool,
@@ -190,21 +196,28 @@ async fn handle_summarize(
     let project_node_id = client.resolve_project_id(&project_id).await?;
 
     let (issues, stats) = client
-        .fetch_project_issues(&project_node_id, &column, since_filter, debug)
+        .fetch_project_issues(&project_node_id, &column, since_filter, iteration.as_deref(), debug)
         .await?;
 
     if debug {
         eprintln!("Debug: Project node ID: {}", project_node_id);
         eprintln!("Debug: Looking for column: \"{}\"", column);
         eprintln!("Debug: Status field: \"{}\"", std::env::var("DONER_STATUS_FIELD").unwrap_or_else(|_| "Status".to_string()));
+        if let Some(ref iter) = iteration {
+            eprintln!("Debug: Iteration filter: \"{}\"", iter);
+        }
         eprintln!("Debug: Total items fetched: {}", stats.total_items);
         eprintln!("Debug: Archived items (skipped): {}", stats.archived);
         eprintln!("Debug: Wrong column (skipped): {}", stats.wrong_column);
         eprintln!("Debug: Not an issue (skipped): {}", stats.not_issue);
+        eprintln!("Debug: Filtered by iteration (skipped): {}", stats.filtered_by_iteration);
         eprintln!("Debug: Filtered by time (skipped): {}", stats.filtered_by_time);
         eprintln!("Debug: Final count: {}", issues.len());
         if !stats.columns_seen.is_empty() {
             eprintln!("Debug: Columns seen: {:?}", stats.columns_seen);
+        }
+        if !stats.iterations_seen.is_empty() {
+            eprintln!("Debug: Iterations seen: {:?}", stats.iterations_seen);
         }
         eprintln!();
     }

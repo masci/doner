@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
@@ -9,6 +9,96 @@ use crate::models::*;
 
 const GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
 
+/// Check if an item's iteration matches the filter.
+/// Supported filter formats:
+/// - `@all` - matches all iterations (no filtering)
+/// - `@current` - matches the iteration that contains today's date
+/// - `@previous` - matches the iteration before current
+/// - `@current,@previous` - matches either current or previous
+/// - `<iteration name>` - exact match on iteration title
+fn matches_iteration_filter(
+    iteration_title: Option<&str>,
+    iteration_start: Option<&str>,
+    filter: &str,
+) -> bool {
+    // @all means no filtering
+    if filter == "@all" {
+        return true;
+    }
+
+    // If filter requires an iteration but item has none, no match
+    if filter.starts_with('@') && iteration_title.is_none() {
+        return false;
+    }
+
+    // Parse filter parts (e.g., "@current,@previous")
+    let filter_parts: Vec<&str> = filter.split(',').map(|s| s.trim()).collect();
+
+    for part in filter_parts {
+        match part {
+            "@current" => {
+                if is_current_iteration(iteration_start) {
+                    return true;
+                }
+            }
+            "@previous" => {
+                // We need context of all iterations to determine "previous"
+                // For now, we'll use a heuristic: previous iteration ended within the last 2 weeks
+                if is_recent_past_iteration(iteration_start) {
+                    return true;
+                }
+            }
+            name => {
+                // Exact match on iteration title
+                if iteration_title == Some(name) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Check if the iteration start date indicates it's the current iteration.
+/// Assumes 2-week sprints by default.
+fn is_current_iteration(start_date: Option<&str>) -> bool {
+    let Some(start_str) = start_date else {
+        return false;
+    };
+
+    let Ok(start) = NaiveDate::parse_from_str(start_str, "%Y-%m-%d") else {
+        return false;
+    };
+
+    let today = Utc::now().date_naive();
+    let sprint_length = 14; // Default 2-week sprint
+
+    // Current iteration: start <= today < start + sprint_length
+    start <= today && today < start + chrono::Duration::days(sprint_length)
+}
+
+/// Check if iteration is from the recent past (likely previous iteration).
+/// Uses heuristic: started between 2-4 weeks ago.
+fn is_recent_past_iteration(start_date: Option<&str>) -> bool {
+    let Some(start_str) = start_date else {
+        return false;
+    };
+
+    let Ok(start) = NaiveDate::parse_from_str(start_str, "%Y-%m-%d") else {
+        return false;
+    };
+
+    let today = Utc::now().date_naive();
+    let sprint_length = 14;
+
+    // Previous iteration: started 2-4 weeks ago
+    let prev_start = today - chrono::Duration::days(sprint_length * 2);
+    let prev_end = today - chrono::Duration::days(sprint_length);
+
+    start >= prev_start && start < prev_end
+}
+
 #[derive(Debug, Default)]
 pub struct FetchStats {
     pub total_items: usize,
@@ -16,7 +106,9 @@ pub struct FetchStats {
     pub wrong_column: usize,
     pub not_issue: usize,
     pub filtered_by_time: usize,
+    pub filtered_by_iteration: usize,
     pub columns_seen: HashSet<String>,
+    pub iterations_seen: HashSet<String>,
 }
 
 pub struct GitHubClient {
@@ -213,6 +305,7 @@ impl GitHubClient {
         project_node_id: &str,
         column_name: &str,
         since: Option<DateTime<Utc>>,
+        iteration_filter: Option<&str>,
         collect_stats: bool,
     ) -> Result<(Vec<Issue>, FetchStats)> {
         let mut all_issues = Vec::new();
@@ -221,14 +314,16 @@ impl GitHubClient {
 
         loop {
             let (issues, page_info, page_stats) = self
-                .fetch_project_items_page(project_node_id, column_name, cursor.as_deref(), collect_stats)
+                .fetch_project_items_page(project_node_id, column_name, iteration_filter, cursor.as_deref(), collect_stats)
                 .await?;
 
             stats.total_items += page_stats.total_items;
             stats.archived += page_stats.archived;
             stats.wrong_column += page_stats.wrong_column;
             stats.not_issue += page_stats.not_issue;
+            stats.filtered_by_iteration += page_stats.filtered_by_iteration;
             stats.columns_seen.extend(page_stats.columns_seen);
+            stats.iterations_seen.extend(page_stats.iterations_seen);
 
             for issue in issues {
                 // Filter by time if specified
@@ -260,11 +355,12 @@ impl GitHubClient {
         &self,
         project_node_id: &str,
         column_name: &str,
+        iteration_filter: Option<&str>,
         cursor: Option<&str>,
         collect_stats: bool,
     ) -> Result<(Vec<Issue>, PageInfo, FetchStats)> {
         let query = r#"
-            query($projectId: ID!, $cursor: String, $statusField: String!) {
+            query($projectId: ID!, $cursor: String, $statusField: String!, $iterationField: String!) {
                 node(id: $projectId) {
                     ... on ProjectV2 {
                         items(first: 100, after: $cursor) {
@@ -279,6 +375,13 @@ impl GitHubClient {
                                     ... on ProjectV2ItemFieldSingleSelectValue {
                                         __typename
                                         name
+                                    }
+                                }
+                                iteration: fieldValueByName(name: $iterationField) {
+                                    ... on ProjectV2ItemFieldIterationValue {
+                                        __typename
+                                        title
+                                        startDate
                                     }
                                 }
                                 content {
@@ -305,13 +408,15 @@ impl GitHubClient {
             }
         "#;
 
-        // Allow overriding the status field name via environment variable
+        // Allow overriding field names via environment variables
         let status_field = std::env::var("DONER_STATUS_FIELD").unwrap_or_else(|_| "Status".to_string());
+        let iteration_field = std::env::var("DONER_ITERATION_FIELD").unwrap_or_else(|_| "Iteration".to_string());
 
         let variables = json!({
             "projectId": project_node_id,
             "cursor": cursor,
-            "statusField": status_field
+            "statusField": status_field,
+            "iterationField": iteration_field
         });
 
         let response = self.execute_query(query, &variables).await?;
@@ -358,6 +463,27 @@ impl GitHubClient {
             if item_column != Some(column_name) {
                 stats.wrong_column += 1;
                 continue;
+            }
+
+            // Get iteration info
+            let item_iteration = item.iteration.as_ref().and_then(|iv| iv.title());
+            let item_iteration_start = item.iteration.as_ref().and_then(|iv| iv.start_date());
+
+            // Collect iteration names for debug output
+            if collect_stats {
+                if let Some(iter) = item_iteration {
+                    stats.iterations_seen.insert(iter.to_string());
+                } else {
+                    stats.iterations_seen.insert("<no iteration>".to_string());
+                }
+            }
+
+            // Filter by iteration if specified
+            if let Some(filter) = iteration_filter {
+                if !matches_iteration_filter(item_iteration, item_iteration_start, filter) {
+                    stats.filtered_by_iteration += 1;
+                    continue;
+                }
             }
 
             // Extract issue content
