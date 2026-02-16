@@ -47,7 +47,7 @@ enum Commands {
         since: Option<String>,
 
         /// Filter by iteration (e.g., @current, @previous, @current,@previous, or iteration name)
-        #[arg(short = 'i', long = "iteration", default_value = "@current,@previous")]
+        #[arg(short = 'i', long = "iteration")]
         iteration: Option<String>,
 
         /// Output format
